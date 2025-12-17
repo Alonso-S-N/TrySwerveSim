@@ -1,11 +1,14 @@
 package frc.robot;
 
+import edu.wpi.first.math.geometry.Pose2d;
+import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.geometry.Translation2d;
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
 import edu.wpi.first.math.kinematics.SwerveModuleState;
 import edu.wpi.first.wpilibj.PS5Controller;
 import edu.wpi.first.wpilibj.RobotBase;
-import edu.wpi.first.wpilibj.Timer;
+import edu.wpi.first.wpilibj.smartdashboard.Field2d;
+import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 
 import org.littletonrobotics.junction.LoggedRobot;
 import org.littletonrobotics.junction.Logger;
@@ -18,10 +21,22 @@ public class Robot extends LoggedRobot {
     private FakeSwerve fakeSwerve;
     private PS5Controller ps5;
 
+    Field2d field = new Field2d();
+FieldSim fieldSim = new FieldSim();
+
     @Override
     public void robotInit() {
 
-        // 🔥 ISSO É OBRIGATÓRIO 🔥
+          SmartDashboard.putData("Field", field);
+
+    fieldSim.pieces.add(
+        new GamePiece(
+            new Translation2d(8.0, 4.0),
+            0.18,
+            3.0
+        )
+    );
+        
     Logger.recordMetadata("ProjectName", "SwerveSim");
     Logger.recordMetadata("BuildType", "Sim");
 
@@ -39,65 +54,64 @@ public class Robot extends LoggedRobot {
     }
 }
 
-        @Override
-        public void teleopPeriodic() {
-        
-            // ===============================
-            // 1️⃣ LEITURA DO CONTROLE
-            // ===============================
-            double xCmd  = -applyDeadband(ps5.getLeftY());
-            double yCmd  = -applyDeadband(ps5.getLeftX());
-            double rotCmd = -applyDeadband(ps5.getRightX());
-        
-            // ===============================
-            // 2️⃣ DRIVE (COMANDO)
-            // ===============================
-            if (fakeSwerve != null) {
-                fakeSwerve.drive(
-                    new Translation2d(xCmd, yCmd),
-                    rotCmd,
-                    false,
-                    true
-                );
-            } else {
-                realSwerve.drive(
-                    new Translation2d(xCmd, yCmd),
-                    rotCmd,
-                    true,
-                    true
-                );
-            }
-        
-            // ===============================
-            // 3️⃣ NETWORKTABLE (MAPLESIM)
-            // ===============================
-            var table = edu.wpi.first.networktables.NetworkTableInstance
-                .getDefault()
-                .getTable("MapleSim");
-        
-            // --- leitura da pose vinda do MapleSim ---
-            double x     = table.getEntry("Pose/X").getDouble(0.0);
-            double y     = table.getEntry("Pose/Y").getDouble(0.0);
-            double theta = table.getEntry("Pose/Theta").getDouble(0.0);
-        
-            fakeSwerve.updateFromMapleSim(x, y, theta);
-        
-            // --- envio do comando PARA o MapleSim ---
-            ChassisSpeeds cmd = fakeSwerve.getCommandedSpeeds();
-        
-            table.getEntry("Cmd/Vx").setDouble(cmd.vxMetersPerSecond);
-            table.getEntry("Cmd/Vy").setDouble(cmd.vyMetersPerSecond);
-            table.getEntry("Cmd/Omega").setDouble(cmd.omegaRadiansPerSecond);
-        
-            // ===============================
-            // 4️⃣ LOG
-            // ===============================
-            Logger.recordOutput("MapleSim/Cmd/Vx", cmd.vxMetersPerSecond);
-            Logger.recordOutput("MapleSim/Cmd/Vy", cmd.vyMetersPerSecond);
-            Logger.recordOutput("MapleSim/Cmd/Omega", cmd.omegaRadiansPerSecond);
-            Logger.recordOutput("MapleSim/Pose", fakeSwerve.getPose());
+    @Override
+    public void teleopPeriodic() {
+
+        double x = -applyDeadband(ps5.getLeftY()); 
+        double y = -applyDeadband(ps5.getLeftX()); 
+        double rot = -applyDeadband(ps5.getRightX());
+
+
+        SwerveModuleState[] states;
+
+        if (fakeSwerve != null) {
+            fakeSwerve.drive(new Translation2d(x, y), rot, true, true);
+            states = fakeSwerve.getModuleStates();
+        } else {
+            realSwerve.drive(new Translation2d(x, y), rot, true, true);
+            states = realSwerve.getModuleStates();
         }
-        
+
+        if (states == null || states.length < 4) {
+            return; 
+        }
+
+        double[] log = new double[8];
+        for (int i = 0; i < 4; i++) {
+            log[i * 2]     = states[i].speedMetersPerSecond;
+            log[i * 2 + 1] = states[i].angle.getRadians();
+        }
+        ChassisSpeeds cs = fakeSwerve.getChassisSpeeds();
+
+       Logger.recordOutput("MapleSim/Commanded/Vx", cs.vxMetersPerSecond);
+       Logger.recordOutput("MapleSim/Commanded/Vy", cs.vyMetersPerSecond);
+       Logger.recordOutput("MapleSim/Commanded/Omega", cs.omegaRadiansPerSecond);
+
+        Logger.recordOutput("Swerve/ModuleStates", log);
+        Logger.recordOutput(
+    "Swerve/HeadingRad",
+    fakeSwerve.getHeading().getRadians());
+        Logger.recordOutput("Swerve/Pose2d", fakeSwerve.getPose());
+
+        double dt = fakeSwerve.getDt();
+
+fieldSim.update(
+    fakeSwerve.getPose(),
+    fakeSwerve.getChassisSpeeds(),
+    dt
+);
+
+// robô
+field.setRobotPose(fakeSwerve.getPose());
+
+// game piece
+int i = 0;
+for (GamePiece p : fieldSim.pieces) {
+    field.getObject("Piece" + i++)
+         .setPose(new Pose2d(p.position, new Rotation2d()));
+}
+
+    }
 
     private double applyDeadband(double value) {
         return Math.abs(value) < 0.05 ? 0.0 : value;
